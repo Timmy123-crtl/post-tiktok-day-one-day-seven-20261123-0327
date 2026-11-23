@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Ghost Dash — Day One</title>
+<style>
+  html,body{margin:0;padding:0;background:#14101a;width:1080px;height:1920px;overflow:hidden}
+  canvas{display:block}
+  #banner{position:absolute;left:0;top:640px;width:1080px;text-align:center;
+    font:900 150px/1.1 "DejaVu Sans",sans-serif;color:#fff;letter-spacing:4px;
+    text-shadow:0 8px 0 rgba(0,0,0,.35);opacity:0;pointer-events:none}
+  #banner small{display:block;font-size:46px;letter-spacing:6px;color:#ffd94d;margin-top:18px}
+  #banner.show{animation:bin 4s ease forwards}
+  @keyframes bin{0%{opacity:0;transform:scale(.92)}8%{opacity:1;transform:scale(1)}
+    80%{opacity:1}100%{opacity:0}}
+  #cta{position:absolute;left:0;top:1560px;width:1080px;text-align:center;
+    font:700 58px/1.35 "DejaVu Sans",sans-serif;color:#fff;opacity:0;pointer-events:none;
+    text-shadow:0 4px 0 rgba(0,0,0,.4)}
+  #cta.show{opacity:1;transition:opacity .6s}
+  #cta b{color:#ffd94d}
+</style>
+</head>
+<body>
+<canvas id="game" width="1080" height="1920"></canvas>
+<div id="banner"></div>
+<div id="cta">Your turn.<br>Start yours at <b>make.fun</b></div>
+<script>
+"use strict";
+// Ghost Dash — DAY ONE build. Same map, same start as the Day Seven build.
+// Tiny browser game: steer the ghost, eat stars, dodge the one chaser.
+const P = new URLSearchParams(location.search);
+const AUTO = P.get("auto") === "1";
+const BANNER = P.get("banner") || "";
+const CTA = P.get("cta") === "1";
+const SEED = 20261123;
+
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;
+  let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;
+  return((t^t>>>14)>>>0)/4294967296;}}
+const rand = mulberry32(SEED);
+
+const cv = document.getElementById("game");
+const ctx = cv.getContext("2d");
+// Arena — identical in v1 and v7.
+const ARENA = {x:40, y:430, w:1000, h:1070};
+const WALLS = [
+  {x:280, y:760, w:200, h:36}, {x:600, y:760, w:200, h:36},
+  {x:280, y:1120, w:200, h:36}, {x:600, y:1120, w:200, h:36},
+];
+const START = {x:540, y:1350};
+
+let score = 0, lives = 3, t = 0;
+const player = {x:START.x, y:START.y, r:34, vx:0, vy:0, speed:340};
+const stars = [];
+const chasers = [{x:540, y:560, r:30, vx:0, vy:0, speed:120}];
+let particles = [];
+
+function spawnStar(){
+  const s = {x:ARENA.x+70+rand()*(ARENA.w-140), y:ARENA.y+70+rand()*(ARENA.h-140),
+             r:22, a:0, born:t};
+  stars.push(s);
+}
+spawnStar();
+
+function nearestStar(){
+  let best=null, bd=1e9;
+  for(const s of stars){const d=(s.x-player.x)**2+(s.y-player.y)**2; if(d<bd){bd=d;best=s;}}
+  return best;
+}
+function collideWalls(o){
+  o.x=Math.max(ARENA.x+o.r, Math.min(ARENA.x+ARENA.w-o.r, o.x));
+  o.y=Math.max(ARENA.y+o.r, Math.min(ARENA.y+ARENA.h-o.r, o.y));
+  for(const w of WALLS){
+    const nx=Math.max(w.x,Math.min(o.x,w.x+w.w)), ny=Math.max(w.y,Math.min(o.y,w.y+w.h));
+    const dx=o.x-nx, dy=o.y-ny, d2=dx*dx+dy*dy;
+    if(d2 < o.r*o.r){
+      const d=Math.sqrt(d2)||1, push=(o.r-d);
+      o.x += dx/d*push; o.y += dy/d*push;
+    }
+  }
+}
+function step(dt){
+  t += dt;
+  // Autoplay: steer toward the nearest star (deterministic, same in v1/v7).
+  let ax=0, ay=0;
+  if(AUTO){
+    const s=nearestStar();
+    if(s){const d=Math.hypot(s.x-player.x, s.y-player.y)||1;
+      ax=(s.x-player.x)/d; ay=(s.y-player.y)/d;}
+  }
+  player.vx = ax*player.speed; player.vy = ay*player.speed;
+  player.x += player.vx*dt; player.y += player.vy*dt;
+  collideWalls(player);
+  for(const s of stars) s.a += dt*3;
+  // Eat stars.
+  for(let i=stars.length-1;i>=0;i--){
+    const s=stars[i];
+    if(Math.hypot(s.x-player.x, s.y-player.y) < player.r+s.r){
+      stars.splice(i,1); score++; spawnStar();
+    }
+  }
+  // The one slow chaser.
+  for(const c of chasers){
+    const d=Math.hypot(player.x-c.x, player.y-c.y)||1;
+    c.x += (player.x-c.x)/d*c.speed*dt; c.y += (player.y-c.y)/d*c.speed*dt;
+    collideWalls(c);
+    if(d < player.r+c.r-6){
+      lives--; player.x=START.x; player.y=START.y; c.x=540; c.y=560;
+      if(lives<=0){ lives=3; score=0; }
+    }
+  }
+}
+function drawGhost(x,y,r,body,eye){
+  ctx.fillStyle=body; ctx.beginPath();
+  ctx.arc(x,y-r*0.25,r,Math.PI,0);
+  ctx.lineTo(x+r, y+r*0.75);
+  for(let i=0;i<3;i++){ctx.quadraticCurveTo(x+r*(0.66-i*0.66)+r*0.16, y+r*1.05,
+    x+r*(0.33-i*0.66), y+r*0.75);}
+  ctx.lineTo(x-r, y+r*0.75); ctx.closePath(); ctx.fill();
+  ctx.fillStyle=eye; ctx.beginPath();
+  ctx.arc(x-r*0.36, y-r*0.3, r*0.16, 0, 7); ctx.arc(x+r*0.36, y-r*0.3, r*0.16, 0, 7); ctx.fill();
+}
+function drawStar(s){
+  ctx.save(); ctx.translate(s.x,s.y); ctx.rotate(Math.sin(s.a)*0.2);
+  ctx.fillStyle="#ffd94d"; ctx.beginPath();
+  for(let i=0;i<10;i++){const r=i%2?s.r*0.45:s.r, a=-Math.PI/2+i*Math.PI/5;
+    ctx[i?"lineTo":"moveTo"](Math.cos(a)*r, Math.sin(a)*r);}
+  ctx.closePath(); ctx.fill(); ctx.restore();
+}
+function draw(){
+  ctx.fillStyle="#14101a"; ctx.fillRect(0,0,1080,1920);
+  // Title + HUD.
+  ctx.fillStyle="#fff"; ctx.font='900 84px "DejaVu Sans",sans-serif';
+  ctx.textAlign="center"; ctx.fillText("GHOST DASH", 540, 150);
+  ctx.font='700 52px "DejaVu Sans",sans-serif'; ctx.textAlign="left";
+  ctx.fillStyle="#ffd94d"; ctx.fillText("SCORE  "+score, 60, 260);
+  ctx.fillStyle="#ff5d8f"; ctx.textAlign="right";
+  ctx.fillText("♥".repeat(lives), 1020, 260);
+  ctx.textAlign="right"; ctx.fillStyle="#8f86a3"; ctx.font='600 40px "DejaVu Sans",sans-serif';
+  ctx.fillText("v1.0", 1020, 330);
+  // Arena.
+  ctx.fillStyle="#1e1830"; ctx.fillRect(ARENA.x, ARENA.y, ARENA.w, ARENA.h);
+  ctx.strokeStyle="#3a2f5e"; ctx.lineWidth=6; ctx.strokeRect(ARENA.x, ARENA.y, ARENA.w, ARENA.h);
+  // Walls.
+  ctx.fillStyle="#3a2f5e";
+  for(const w of WALLS) ctx.fillRect(w.x, w.y, w.w, w.h);
+  // Dots grid.
+  ctx.fillStyle="rgba(255,255,255,0.07)";
+  for(let gx=ARENA.x+80; gx<ARENA.x+ARENA.w; gx+=120)
+    for(let gy=ARENA.y+80; gy<ARENA.y+ARENA.h; gy+=120)
+      {ctx.beginPath(); ctx.arc(gx,gy,5,0,7); ctx.fill();}
+  for(const s of stars) drawStar(s);
+  for(const c of chasers) drawGhost(c.x, c.y, c.r, "#ff5d8f", "#14101a");
+  drawGhost(player.x, player.y, player.r, "#ffffff", "#14101a");
+  // Bottom caption.
+  ctx.fillStyle="#8f86a3"; ctx.font='600 44px "DejaVu Sans",sans-serif'; ctx.textAlign="center";
+  ctx.fillText("eat the stars · dodge the chaser", 540, 1620);
+  ctx.fillStyle="#5b5470"; ctx.font='600 38px "DejaVu Sans",sans-serif';
+  ctx.fillText("made by my AI agent · day 1", 540, 1690);
+}
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(0.05, (now-last)/1000); last = now;
+  step(dt); draw();
+  requestAnimationFrame(loop);
+}
+if(BANNER){
+  const b = document.getElementById("banner");
+  b.innerHTML = BANNER + "<small>THE SAME GAME · DAY 1</small>";
+  b.classList.add("show");
+}
+if(CTA) document.getElementById("cta").classList.add("show");
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
